@@ -32,8 +32,8 @@ export default function Home() {
   // Hydraulic Configuration state
   const [config, setConfig] = useState<HydraulicConfig>({
     units: 'imperial',
-    flowRateGPM: 150,
-    pipeDiameterInches: 3.0,
+    flowRateGPM: 1500,
+    pipeDiameterInches: 12.0,
     pipeMaterial: 'PVC / HDPE (Smooth Plastic)',
     cFactor: 150,
     desiredPressurePSI: 60,
