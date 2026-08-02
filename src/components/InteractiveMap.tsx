@@ -210,11 +210,12 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
 
   // Initialize MapLibre GL instance
   useEffect(() => {
-    if (!mapContainerRef.current || activeCoords.length === 0) return;
+    // Use geometry.coordinates — available immediately after KMZ parse, before hydraulics run
+    if (!mapContainerRef.current || !geometry?.coordinates || geometry.coordinates.length === 0) return;
 
-    const lineCoords: [number, number][] = activeCoords.map((c) => [c.lng, c.lat]);
-    const centerLng = activeCoords[Math.floor(activeCoords.length / 2)].lng;
-    const centerLat = activeCoords[Math.floor(activeCoords.length / 2)].lat;
+    const geoCoords = geometry.coordinates;
+    const centerLng = geoCoords[Math.floor(geoCoords.length / 2)].lng;
+    const centerLat = geoCoords[Math.floor(geoCoords.length / 2)].lat;
 
     const selectedStyle =
       mapStyle === 'satellite'
@@ -246,14 +247,19 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
 
       map.on('load', () => {
         mapLoadedRef.current = true;
-        // Always use raw geometry coords (available immediately after KMZ parse)
-        const geoCoords: [number, number][] = geometry.coordinates.map((c) => [c.lng, c.lat]);
-        if (geoCoords.length > 1) {
-          const bounds = geoCoords.reduce(
+        // Fit to pipeline on first load using geometry coords
+        const initCoords: [number, number][] = geometry.coordinates.map((c) => [c.lng, c.lat]);
+        if (initCoords.length > 1) {
+          const bounds = initCoords.reduce(
             (b, coord) => b.extend(coord as [number, number]),
-            new maplibregl.LngLatBounds(geoCoords[0], geoCoords[0])
+            new maplibregl.LngLatBounds(initCoords[0], initCoords[0])
           );
           map.fitBounds(bounds, { padding: 60, duration: 1800, essential: true });
+          // After animation, re-render markers and pipeline line
+          map.once('moveend', () => {
+            updatePumpMarkers();
+            renderOverlayPipeline();
+          });
         }
         updatePumpMarkers();
         renderOverlayPipeline();
@@ -306,9 +312,33 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
 
   // Re-render overlay pipeline & markers when hydraulics, activeCoords, or colorCodeMode change
   useEffect(() => {
-    updatePumpMarkers();
-    renderOverlayPipeline();
+    if (!mapRef.current) return;
+    if (mapLoadedRef.current) {
+      // Map already initialized and loaded — update immediately
+      updatePumpMarkers();
+      renderOverlayPipeline();
+    } else {
+      // Map still initializing — queue update for after load
+      mapRef.current.once('load', () => {
+        updatePumpMarkers();
+        renderOverlayPipeline();
+      });
+    }
   }, [hydraulics, colorCodeMode, activeCoords, renderOverlayPipeline, updatePumpMarkers]);
+
+  // Extra safety: re-render after camera stops moving (covers fitBounds animation completion)
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const onMoveEnd = () => {
+      renderOverlayPipeline();
+      updatePumpMarkers();
+    };
+    map.on('moveend', onMoveEnd);
+    return () => {
+      map.off('moveend', onMoveEnd);
+    };
+  }, [renderOverlayPipeline, updatePumpMarkers, hydraulics]);
 
   const inspectNode = selectedCoordinate || activeCoords[0];
 
