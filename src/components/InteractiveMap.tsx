@@ -93,11 +93,19 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const markersRef = useRef<maplibregl.Marker[]>([]);
-
-  const [mapStyle, setMapStyle] = useState<'satellite' | 'dark' | 'streets'>('dark');
+  const [mapStyle, setMapStyle] = useState<'satellite' | 'dark' | 'streets'>('satellite');
   const [colorCodeMode, setColorCodeMode] = useState<'elevation' | 'pressure'>('elevation');
 
-  const activeCoords = hydraulics?.coordinates || geometry?.coordinates || [];
+  const rawCoords = hydraulics?.coordinates || geometry?.coordinates || [];
+  const lastPumpIdx = hydraulics?.pumps && hydraulics.pumps.length > 0
+    ? hydraulics.pumps[hydraulics.pumps.length - 1].coordinateIndex
+    : undefined;
+
+  // Cleanly terminate pipeline route line at final pump station / destination to eliminate trailing extra line segments
+  const activeCoords =
+    lastPumpIdx !== undefined && lastPumpIdx > 0 && lastPumpIdx < rawCoords.length
+      ? rawCoords.slice(0, lastPumpIdx + 1)
+      : rawCoords;
 
   // Function to render pipeline route line on overlay canvas synchronized with map projection
   const renderOverlayPipeline = useCallback(() => {
