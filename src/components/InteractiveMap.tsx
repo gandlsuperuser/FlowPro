@@ -240,7 +240,7 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
             (b, coord) => b.extend(coord as [number, number]),
             new maplibregl.LngLatBounds(lineCoords[0], lineCoords[0])
           );
-          map.fitBounds(bounds, { padding: 60 });
+          map.fitBounds(bounds, { padding: 60, duration: 1800, essential: true });
         }
         updatePumpMarkers();
         renderOverlayPipeline();
@@ -256,6 +256,30 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
       console.warn('MapLibre GL initialization error:', err);
     }
   }, [geometry.id, mapStyle]);
+
+  // Smoothly animate camera when geometry ID changes (e.g. uploaded KMZ/KML file)
+  useEffect(() => {
+    if (mapRef.current && activeCoords.length > 0) {
+      const lineCoords: [number, number][] = activeCoords.map((c) => [c.lng, c.lat]);
+      const bounds = lineCoords.reduce(
+        (b, coord) => b.extend(coord as [number, number]),
+        new maplibregl.LngLatBounds(lineCoords[0], lineCoords[0])
+      );
+      mapRef.current.fitBounds(bounds, { padding: 60, duration: 1800, essential: true });
+    }
+  }, [geometry.id, activeCoords]);
+
+  // Smoothly fly camera to selected coordinate node when clicked
+  useEffect(() => {
+    if (mapRef.current && selectedCoordinate) {
+      mapRef.current.flyTo({
+        center: [selectedCoordinate.lng, selectedCoordinate.lat],
+        zoom: 14,
+        duration: 1400,
+        essential: true,
+      });
+    }
+  }, [selectedCoordinate]);
 
   // Re-render overlay pipeline & markers when hydraulics, activeCoords, or colorCodeMode change
   useEffect(() => {
