@@ -93,6 +93,7 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const markersRef = useRef<maplibregl.Marker[]>([]);
+  const mapLoadedRef = useRef<boolean>(false);
   const [mapStyle, setMapStyle] = useState<'satellite' | 'dark' | 'streets'>('satellite');
   const [colorCodeMode, setColorCodeMode] = useState<'elevation' | 'pressure'>('elevation');
 
@@ -223,6 +224,7 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
         : DARK_STYLE;
 
     try {
+      mapLoadedRef.current = false;
       const map = new maplibregl.Map({
         container: mapContainerRef.current,
         style: selectedStyle,
@@ -243,10 +245,13 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
       map.on('resize', onMapRender);
 
       map.on('load', () => {
-        if (lineCoords.length > 0) {
-          const bounds = lineCoords.reduce(
+        mapLoadedRef.current = true;
+        // Always use raw geometry coords (available immediately after KMZ parse)
+        const geoCoords: [number, number][] = geometry.coordinates.map((c) => [c.lng, c.lat]);
+        if (geoCoords.length > 1) {
+          const bounds = geoCoords.reduce(
             (b, coord) => b.extend(coord as [number, number]),
-            new maplibregl.LngLatBounds(lineCoords[0], lineCoords[0])
+            new maplibregl.LngLatBounds(geoCoords[0], geoCoords[0])
           );
           map.fitBounds(bounds, { padding: 60, duration: 1800, essential: true });
         }
@@ -257,6 +262,7 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
       return () => {
         markersRef.current.forEach((m) => m.remove());
         markersRef.current = [];
+        mapLoadedRef.current = false;
         map.remove();
         mapRef.current = null;
       };
@@ -265,17 +271,26 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
     }
   }, [geometry.id, mapStyle]);
 
-  // Smoothly animate camera when geometry ID changes (e.g. uploaded KMZ/KML file)
+  // Fly to pipeline whenever geometry changes (handles first upload + pipeline switch)
+  // Uses geometry.coordinates directly — always available right after KMZ parse
   useEffect(() => {
-    if (mapRef.current && activeCoords.length > 0) {
-      const lineCoords: [number, number][] = activeCoords.map((c) => [c.lng, c.lat]);
-      const bounds = lineCoords.reduce(
-        (b, coord) => b.extend(coord as [number, number]),
-        new maplibregl.LngLatBounds(lineCoords[0], lineCoords[0])
-      );
+    if (!geometry?.coordinates || geometry.coordinates.length < 2) return;
+    const geoCoords: [number, number][] = geometry.coordinates.map((c) => [c.lng, c.lat]);
+    const bounds = geoCoords.reduce(
+      (b, coord) => b.extend(coord as [number, number]),
+      new maplibregl.LngLatBounds(geoCoords[0], geoCoords[0])
+    );
+    if (mapRef.current && mapLoadedRef.current) {
+      // Map already ready — animate immediately
       mapRef.current.fitBounds(bounds, { padding: 60, duration: 1800, essential: true });
+    } else if (mapRef.current) {
+      // Map initializing — fire once it finishes loading
+      const onLoad = () => {
+        mapRef.current?.fitBounds(bounds, { padding: 60, duration: 1800, essential: true });
+      };
+      mapRef.current.once('load', onLoad);
     }
-  }, [geometry.id, activeCoords]);
+  }, [geometry.id, geometry.coordinates]);
 
   // Smoothly fly camera to selected coordinate node when clicked
   useEffect(() => {
