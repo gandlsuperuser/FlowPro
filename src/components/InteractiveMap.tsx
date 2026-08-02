@@ -94,21 +94,35 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
   const mapRef = useRef<maplibregl.Map | null>(null);
   const markersRef = useRef<maplibregl.Marker[]>([]);
   const mapLoadedRef = useRef<boolean>(false);
+
   const [mapStyle, setMapStyle] = useState<'satellite' | 'dark' | 'streets'>('satellite');
   const [colorCodeMode, setColorCodeMode] = useState<'elevation' | 'pressure'>('elevation');
 
+  // ─── Derive activeCoords ─────────────────────────────────────────────────────
   const rawCoords = hydraulics?.coordinates || geometry?.coordinates || [];
-  const lastPumpIdx = hydraulics?.pumps && hydraulics.pumps.length > 0
-    ? hydraulics.pumps[hydraulics.pumps.length - 1].coordinateIndex
-    : undefined;
+  const lastPumpIdx =
+    hydraulics?.pumps && hydraulics.pumps.length > 0
+      ? hydraulics.pumps[hydraulics.pumps.length - 1].coordinateIndex
+      : undefined;
 
-  // Cleanly terminate pipeline route line at final pump station / destination to eliminate trailing extra line segments
   const activeCoords =
     lastPumpIdx !== undefined && lastPumpIdx > 0 && lastPumpIdx < rawCoords.length
       ? rawCoords.slice(0, lastPumpIdx + 1)
       : rawCoords;
 
-  // Function to render pipeline route line on overlay canvas synchronized with map projection
+  // ─── Stable refs so map event listeners always call the latest functions ─────
+  // This avoids stale-closure bugs where map.on('render',...) holds an old copy
+  const activeCoordsRef = useRef(activeCoords);
+  const colorCodeModeRef = useRef(colorCodeMode);
+  const hydraulicsRef = useRef(hydraulics);
+  const onSelectCoordinateRef = useRef(onSelectCoordinate);
+
+  useEffect(() => { activeCoordsRef.current = activeCoords; }, [activeCoords]);
+  useEffect(() => { colorCodeModeRef.current = colorCodeMode; }, [colorCodeMode]);
+  useEffect(() => { hydraulicsRef.current = hydraulics; }, [hydraulics]);
+  useEffect(() => { onSelectCoordinateRef.current = onSelectCoordinate; }, [onSelectCoordinate]);
+
+  // ─── Canvas pipeline renderer (reads from refs — always up to date) ──────────
   const renderOverlayPipeline = useCallback(() => {
     if (!mapRef.current || !overlayCanvasRef.current) return;
     const map = mapRef.current;
@@ -127,19 +141,19 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
 
     ctx.clearRect(0, 0, width, height);
 
-    const coords = activeCoords;
+    const coords = activeCoordsRef.current;
     if (!coords || coords.length < 2) return;
 
-    // Project lat/lng to screen x/y
     const screenPts = coords.map((c) => {
       const pt = map.project([c.lng, c.lat]);
       return { x: pt.x, y: pt.y };
     });
 
-    const glowColor = colorCodeMode === 'elevation' ? 'rgba(6, 182, 212, 0.75)' : 'rgba(16, 185, 129, 0.75)';
-    const coreColor = colorCodeMode === 'elevation' ? '#00f0ff' : '#00ff88';
+    const mode = colorCodeModeRef.current;
+    const glowColor = mode === 'elevation' ? 'rgba(6, 182, 212, 0.75)' : 'rgba(16, 185, 129, 0.75)';
+    const coreColor = mode === 'elevation' ? '#00f0ff' : '#00ff88';
 
-    // 1. Draw wide pipeline glow line
+    // 1. Glow halo
     ctx.beginPath();
     ctx.lineWidth = 18;
     ctx.strokeStyle = glowColor;
@@ -151,7 +165,7 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
     });
     ctx.stroke();
 
-    // 2. Draw core bright pipeline line
+    // 2. Core bright line
     ctx.beginPath();
     ctx.lineWidth = 7;
     ctx.strokeStyle = coreColor;
@@ -163,7 +177,7 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
     });
     ctx.stroke();
 
-    // 3. Draw glowing white node points along route
+    // 3. Node dots
     screenPts.forEach((pt) => {
       ctx.beginPath();
       ctx.arc(pt.x, pt.y, 4, 0, 2 * Math.PI);
@@ -173,19 +187,21 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
       ctx.lineWidth = 1.5;
       ctx.stroke();
     });
-  }, [activeCoords, colorCodeMode]);
+  }, []); // no deps — reads everything via refs
 
-  // Update DOM Booster Pump Station Markers
+  // ─── Pump marker updater (reads from refs — always up to date) ──────────────
   const updatePumpMarkers = useCallback(() => {
     if (!mapRef.current) return;
     const map = mapRef.current;
 
-    // Remove previous markers
     markersRef.current.forEach((m) => m.remove());
     markersRef.current = [];
 
-    if (hydraulics && hydraulics.pumps && activeCoords.length > 0) {
-      hydraulics.pumps.forEach((pump) => {
+    const hydr = hydraulicsRef.current;
+    const coords = activeCoordsRef.current;
+
+    if (hydr && hydr.pumps && coords.length > 0) {
+      hydr.pumps.forEach((pump) => {
         const el = document.createElement('div');
         el.className = 'relative flex items-center justify-center cursor-pointer group z-20';
         el.innerHTML = `
@@ -193,10 +209,9 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
             P${pump.pumpNumber}
           </div>
         `;
-
         el.addEventListener('click', () => {
-          const coord = activeCoords[pump.coordinateIndex];
-          if (coord) onSelectCoordinate(coord);
+          const coord = activeCoordsRef.current[pump.coordinateIndex];
+          if (coord) onSelectCoordinateRef.current(coord);
         });
 
         const marker = new maplibregl.Marker({ element: el })
@@ -206,11 +221,10 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
         markersRef.current.push(marker);
       });
     }
-  }, [hydraulics, activeCoords, onSelectCoordinate]);
+  }, []); // no deps — reads everything via refs
 
-  // Initialize MapLibre GL instance
+  // ─── Initialize MapLibre map (re-runs only when geometry or style changes) ───
   useEffect(() => {
-    // Use geometry.coordinates — available immediately after KMZ parse, before hydraulics run
     if (!mapContainerRef.current || !geometry?.coordinates || geometry.coordinates.length === 0) return;
 
     const geoCoords = geometry.coordinates;
@@ -218,14 +232,13 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
     const centerLat = geoCoords[Math.floor(geoCoords.length / 2)].lat;
 
     const selectedStyle =
-      mapStyle === 'satellite'
-        ? SATELLITE_STYLE
-        : mapStyle === 'streets'
-        ? STREETS_STYLE
-        : DARK_STYLE;
+      mapStyle === 'satellite' ? SATELLITE_STYLE
+      : mapStyle === 'streets' ? STREETS_STYLE
+      : DARK_STYLE;
 
     try {
       mapLoadedRef.current = false;
+
       const map = new maplibregl.Map({
         container: mapContainerRef.current,
         style: selectedStyle,
@@ -236,18 +249,20 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
       map.addControl(new maplibregl.NavigationControl(), 'top-right');
       mapRef.current = map;
 
-      const onMapRender = () => {
+      // These listeners call the stable renderOverlayPipeline which reads via refs
+      map.on('move', renderOverlayPipeline);
+      map.on('zoom', renderOverlayPipeline);
+      map.on('render', renderOverlayPipeline);
+      map.on('resize', renderOverlayPipeline);
+      map.on('moveend', () => {
         renderOverlayPipeline();
-      };
-
-      map.on('move', onMapRender);
-      map.on('zoom', onMapRender);
-      map.on('render', onMapRender);
-      map.on('resize', onMapRender);
+        updatePumpMarkers();
+      });
 
       map.on('load', () => {
         mapLoadedRef.current = true;
-        // Fit to pipeline on first load using geometry coords
+
+        // Fit bounds to pipeline
         const initCoords: [number, number][] = geometry.coordinates.map((c) => [c.lng, c.lat]);
         if (initCoords.length > 1) {
           const bounds = initCoords.reduce(
@@ -255,14 +270,11 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
             new maplibregl.LngLatBounds(initCoords[0], initCoords[0])
           );
           map.fitBounds(bounds, { padding: 60, duration: 1800, essential: true });
-          // After animation, re-render markers and pipeline line
-          map.once('moveend', () => {
-            updatePumpMarkers();
-            renderOverlayPipeline();
-          });
         }
-        updatePumpMarkers();
+
+        // Draw immediately (uses refs so it always has latest coords)
         renderOverlayPipeline();
+        updatePumpMarkers();
       });
 
       return () => {
@@ -275,10 +287,15 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
     } catch (err) {
       console.warn('MapLibre GL initialization error:', err);
     }
-  }, [geometry.id, mapStyle]);
+  }, [geometry.id, mapStyle, renderOverlayPipeline, updatePumpMarkers]);
 
-  // Fly to pipeline whenever geometry changes (handles first upload + pipeline switch)
-  // Uses geometry.coordinates directly — always available right after KMZ parse
+  // ─── Re-draw whenever activeCoords / hydraulics / colorCodeMode change ───────
+  useEffect(() => {
+    renderOverlayPipeline();
+    updatePumpMarkers();
+  }, [activeCoords, hydraulics, colorCodeMode, renderOverlayPipeline, updatePumpMarkers]);
+
+  // ─── Fly camera to pipeline whenever geometry changes (first upload + switch) ─
   useEffect(() => {
     if (!geometry?.coordinates || geometry.coordinates.length < 2) return;
     const geoCoords: [number, number][] = geometry.coordinates.map((c) => [c.lng, c.lat]);
@@ -286,19 +303,17 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
       (b, coord) => b.extend(coord as [number, number]),
       new maplibregl.LngLatBounds(geoCoords[0], geoCoords[0])
     );
+
     if (mapRef.current && mapLoadedRef.current) {
-      // Map already ready — animate immediately
       mapRef.current.fitBounds(bounds, { padding: 60, duration: 1800, essential: true });
     } else if (mapRef.current) {
-      // Map initializing — fire once it finishes loading
-      const onLoad = () => {
+      mapRef.current.once('load', () => {
         mapRef.current?.fitBounds(bounds, { padding: 60, duration: 1800, essential: true });
-      };
-      mapRef.current.once('load', onLoad);
+      });
     }
-  }, [geometry.id, geometry.coordinates]);
+  }, [geometry.id]);
 
-  // Smoothly fly camera to selected coordinate node when clicked
+  // ─── Fly camera to clicked coordinate ────────────────────────────────────────
   useEffect(() => {
     if (mapRef.current && selectedCoordinate) {
       mapRef.current.flyTo({
@@ -309,36 +324,6 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
       });
     }
   }, [selectedCoordinate]);
-
-  // Re-render overlay pipeline & markers when hydraulics, activeCoords, or colorCodeMode change
-  useEffect(() => {
-    if (!mapRef.current) return;
-    if (mapLoadedRef.current) {
-      // Map already initialized and loaded — update immediately
-      updatePumpMarkers();
-      renderOverlayPipeline();
-    } else {
-      // Map still initializing — queue update for after load
-      mapRef.current.once('load', () => {
-        updatePumpMarkers();
-        renderOverlayPipeline();
-      });
-    }
-  }, [hydraulics, colorCodeMode, activeCoords, renderOverlayPipeline, updatePumpMarkers]);
-
-  // Extra safety: re-render after camera stops moving (covers fitBounds animation completion)
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    const onMoveEnd = () => {
-      renderOverlayPipeline();
-      updatePumpMarkers();
-    };
-    map.on('moveend', onMoveEnd);
-    return () => {
-      map.off('moveend', onMoveEnd);
-    };
-  }, [renderOverlayPipeline, updatePumpMarkers, hydraulics]);
 
   const inspectNode = selectedCoordinate || activeCoords[0];
 
