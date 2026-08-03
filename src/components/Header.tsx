@@ -56,24 +56,7 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Dataset Selector & Controls */}
         <div className="flex items-center flex-wrap justify-center gap-2">
-          {/* Sample Pipeline Selector */}
-          <div className="flex items-center bg-slate-850 border border-slate-750 rounded-lg px-2.5 py-1 text-xs">
-            <span className="text-slate-400 mr-2 font-medium">Pipeline:</span>
-            <select
-              value={currentPipeline.id}
-              onChange={(e) => {
-                const found = samplePipelines.find((p) => p.id === e.target.value);
-                if (found) onSelectPipeline(found);
-              }}
-              className="bg-slate-900 text-cyan-300 font-semibold focus:outline-none cursor-pointer py-1"
-            >
-              {samplePipelines.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name} ({p.stats.totalLength} mi)
-                </option>
-              ))}
-            </select>
-          </div>
+
 
           {/* Unit Toggle */}
           <div className="flex items-center bg-slate-950 border border-slate-800 rounded-lg p-0.5 text-xs">

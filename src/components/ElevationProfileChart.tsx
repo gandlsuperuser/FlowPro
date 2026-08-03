@@ -28,11 +28,24 @@ export const ElevationProfileChart: React.FC<ElevationProfileChartProps> = ({
 }) => {
   const isMetric = hydraulics.coordinates[0]?.elevation !== undefined && false; // checked via parent unit
 
-  // Prepare chart data array
-  const chartData = hydraulics.coordinates.map((coord) => ({
+  // Truncate coordinate data at the last pump station – anything beyond the last
+  // pump is outside the designed pipeline and creates visual artifacts on the chart.
+  const lastPumpIdx =
+    hydraulics.pumps && hydraulics.pumps.length > 0
+      ? hydraulics.pumps[hydraulics.pumps.length - 1].coordinateIndex
+      : undefined;
+
+  const relevantCoords =
+    lastPumpIdx !== undefined && lastPumpIdx > 0 && lastPumpIdx < hydraulics.coordinates.length
+      ? hydraulics.coordinates.slice(0, lastPumpIdx + 1)
+      : hydraulics.coordinates;
+
+  // Prepare chart data array – clamp pressure to 0 minimum so the line doesn't
+  // produce wild negative swings (visual artifacts) past the last pump station.
+  const chartData = relevantCoords.map((coord) => ({
     dist: coord.distanceFromStart,
     elevation: coord.elevation,
-    pressure: coord.pressure || 0,
+    pressure: Math.max(0, coord.pressure || 0),
     headLoss: coord.headLoss || 0,
     coord,
   }));
@@ -101,7 +114,7 @@ export const ElevationProfileChart: React.FC<ElevationProfileChartProps> = ({
             <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
             <XAxis dataKey="dist" stroke="#64748b" fontSize={11} tickFormatter={(v) => `${v} mi`} />
             <YAxis yAxisId="elev" stroke="#38bdf8" fontSize={11} domain={['auto', 'auto']} unit=" ft" />
-            <YAxis yAxisId="press" orientation="right" stroke="#34d399" fontSize={11} domain={['auto', 'auto']} unit=" PSI" />
+            <YAxis yAxisId="press" orientation="right" stroke="#34d399" fontSize={11} domain={[0, 'auto']} unit=" PSI" />
 
             <Tooltip
               content={({ active, payload }) => {

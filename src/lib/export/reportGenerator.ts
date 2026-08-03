@@ -251,3 +251,9 @@ export function exportToPDFReport(geometry: PipelineGeometry, hydraulics: Hydrau
 
   doc.save(`${geometry.name.replace(/\s+/g, '_')}_Engineering_Report.pdf`);
 }
+
+export async function generateReport(geometry: PipelineGeometry, options: any): Promise<string> {
+  const reportFilename = `${geometry.name ? geometry.name.replace(/\s+/g, '_') : 'pipeline'}_Engineering_Report.pdf`;
+  return reportFilename;
+}
+
